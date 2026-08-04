@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import shutil
 from pypdf import PdfReader
 from pdf2image import convert_from_path
 import pytesseract
@@ -118,7 +119,7 @@ class InvoiceHandler(FileSystemEventHandler):
             os.makedirs(PROCESSED_DIR, exist_ok=True)
             destination = os.path.join(PROCESSED_DIR, new_filename)
 
-            os.rename(file_path, destination)
+            shutil.move(file_path, destination)
             print(f"Successfully processed -> {destination}")
 
         except Exception as e:
