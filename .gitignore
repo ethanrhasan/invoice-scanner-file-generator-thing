@@ -1,0 +1,18 @@
+# personal configuration
+src/config.json
+
+# py cache
+__pycache__/
+*.pyc
+
+# vm
+venv/
+.venv/
+
+# os junk files
+.DS_Store
+Thumbs.db
+
+# editor folders
+.vscode/
+.idea/

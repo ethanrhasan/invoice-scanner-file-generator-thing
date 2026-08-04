@@ -1,0 +1,6 @@
+required dependencies/libraries
+
+pypdf
+pytesseract
+pdf2image
+watchdog
