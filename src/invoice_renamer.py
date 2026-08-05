@@ -11,27 +11,47 @@ import json
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
-with open(CONFIG_PATH, "r") as f:
-    CONFIG = json.load(f)
 
-WATCH_DIR = os.path.expanduser(CONFIG["watch_dir"])
-PROCESSED_DIR = os.path.expanduser(CONFIG["processed_dir"])
+def load_config():
+    with open(CONFIG_PATH, "r") as f:
+        return json.load(f)
 
-if CONFIG.get("tesseract_cmd"):
-    pytesseract.pytesseract.tesseract_cmd = CONFIG["tesseract_cmd"]
 
-POPPLER_PATH = CONFIG.get("poppler_path") or None
+def save_config(config):
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=4)
+
+
+def default_confirm_delete(original_path, destination_path):
+    try:
+        answer = input(
+            f"Output saved to {destination_path}\nDelete the original scan ({original_path})? [y/N]: "
+        ).strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
 class InvoiceHandler(FileSystemEventHandler):
+    def __init__(self, config, log=print, confirm_delete=None):
+        super().__init__()
+        self.log = log
+        self.confirm_delete = confirm_delete or default_confirm_delete
+        self.watch_dir = os.path.expanduser(config["watch_dir"])
+        self.processed_dir = os.path.expanduser(config["processed_dir"])
+        self.poppler_path = config.get("poppler_path") or None
+
+        if config.get("tesseract_cmd"):
+            pytesseract.pytesseract.tesseract_cmd = config["tesseract_cmd"]
+
     def on_created(self, event):
         if event.is_directory or not event.src_path.lower().endswith(".pdf"):
             return
 
-        print(f"New scan detected: {event.src_path}")
+        self.log(f"New scan detected: {event.src_path}")
         self.process_pdf(event.src_path)
 
     def wait_for_stable_file(self, file_path, timeout=15, check_interval=0.5):
-        """Wait until the file exists and its size stops changing, since
-        scanners often write/rename files asynchronously."""
         start = time.time()
         last_size = -1
 
@@ -46,8 +66,6 @@ class InvoiceHandler(FileSystemEventHandler):
         return os.path.exists(file_path)
 
     def extract_pages_text(self, file_path):
-        """Return a list of text strings, one per page. Tries the embedded
-        text layer first; OCRs any page that comes back blank."""
         page_texts = []
 
         try:
@@ -55,7 +73,7 @@ class InvoiceHandler(FileSystemEventHandler):
             for page in reader.pages:
                 page_texts.append(page.extract_text() or "")
         except Exception as e:
-            print(f"pypdf text extraction failed: {e}")
+            self.log(f"pypdf text extraction failed: {e}")
             page_texts = []
 
         has_any_text = any(t.strip() for t in page_texts)
@@ -65,14 +83,14 @@ class InvoiceHandler(FileSystemEventHandler):
             return page_texts
 
         if not has_any_text:
-            print("No text layer found, falling back to OCR for all pages...")
+            self.log("No text layer found, falling back to OCR for all pages...")
         else:
-            print("Some pages missing text, falling back to OCR for those pages...")
+            self.log("Some pages missing text, falling back to OCR for those pages...")
 
         try:
-            images = convert_from_path(file_path, dpi=300, poppler_path=POPPLER_PATH)
+            images = convert_from_path(file_path, dpi=300, poppler_path=self.poppler_path)
         except Exception as e:
-            print(f"Failed to rasterize PDF for OCR: {e}")
+            self.log(f"Failed to rasterize PDF for OCR: {e}")
             return page_texts  # return whatever partial text we had, if any
 
         if not page_texts:
@@ -87,14 +105,14 @@ class InvoiceHandler(FileSystemEventHandler):
 
     def process_pdf(self, file_path):
         if not self.wait_for_stable_file(file_path):
-            print(f"File never became available: {file_path}")
+            self.log(f"File never became available: {file_path}")
             return
 
         try:
             page_texts = self.extract_pages_text(file_path)
 
             if not page_texts or not any(t.strip() for t in page_texts):
-                print("OCR produced no text. File left in incoming folder.")
+                self.log("OCR produced no text. File left in incoming folder.")
                 return
 
             invoice_numbers = []
@@ -106,37 +124,55 @@ class InvoiceHandler(FileSystemEventHandler):
                 if matches:
                     invoice_numbers.append(matches[0])
                 else:
-                    print(f"Page {i + 1}: no invoice number found.")
-                    print(f"--- OCR text preview (page {i + 1}) ---\n{text[:300]}\n------------------------")
+                    self.log(f"Page {i + 1}: no invoice number found.")
+                    self.log(f"--- OCR text preview (page {i + 1}) ---\n{text[:300]}\n------------------------")
 
             if not invoice_numbers:
-                print("No invoice numbers extracted from any page. File left in incoming folder.")
+                self.log("No invoice numbers extracted from any page. File left in incoming folder.")
                 return
 
             invoices_str = " ".join(invoice_numbers)
             new_filename = f"{invoices_str}.pdf"
 
-            os.makedirs(PROCESSED_DIR, exist_ok=True)
-            destination = os.path.join(PROCESSED_DIR, new_filename)
+            os.makedirs(self.processed_dir, exist_ok=True)
+            destination = os.path.join(self.processed_dir, new_filename)
 
-            shutil.move(file_path, destination)
-            print(f"Successfully processed -> {destination}")
+            shutil.copy2(file_path, destination)
+            self.log(f"Successfully processed -> {destination}")
+
+            if self.confirm_delete(file_path, destination):
+                try:
+                    os.remove(file_path)
+                    self.log(f"Deleted original scan: {file_path}")
+                except Exception as e:
+                    self.log(f"Could not delete original scan: {e}")
+            else:
+                self.log(f"Kept original scan in input folder: {file_path}")
 
         except Exception as e:
-            print(f"Error reading file: {e}")
+            self.log(f"Error reading file: {e}")
+
+
+def run_watcher(config, log=print, stop_event=None, confirm_delete=None):
+    watch_dir = os.path.expanduser(config["watch_dir"])
+    os.makedirs(watch_dir, exist_ok=True)
+
+    event_handler = InvoiceHandler(config, log=log, confirm_delete=confirm_delete)
+    observer = Observer()
+    observer.schedule(event_handler, watch_dir, recursive=False)
+
+    log(f"Watching {watch_dir}...")
+    observer.start()
+    try:
+        while not (stop_event and stop_event.is_set()):
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        observer.stop()
+        observer.join()
+        log("Stopped watching.")
 
 
 if __name__ == "__main__":
-    os.makedirs(WATCH_DIR, exist_ok=True)
-    event_handler = InvoiceHandler()
-    observer = Observer()
-    observer.schedule(event_handler, WATCH_DIR, recursive=False)
-
-    print(f"Watching {WATCH_DIR}...")
-    observer.start()
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
+    run_watcher(load_config())
