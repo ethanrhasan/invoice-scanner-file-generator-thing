@@ -105,10 +105,11 @@ class InvoiceRenamerGUI:
             request = None
 
         if request is not None:
-            original_path, destination_path, result_holder, done_event = request
+            original_path, destination_paths, result_holder, done_event = request
+            outputs = "\n".join(destination_paths)
             answer = messagebox.askyesno(
                 "Delete original scan?",
-                f"Output saved to:\n{destination_path}\n\n"
+                f"Output saved to:\n{outputs}\n\n"
                 f"Delete the original scan from the input folder?\n{original_path}",
             )
             result_holder.append(answer)
@@ -116,12 +117,12 @@ class InvoiceRenamerGUI:
 
         self.root.after(150, self._poll_confirm_queue)
 
-    def _confirm_delete(self, original_path, destination_path):
+    def _confirm_delete(self, original_path, destination_paths):
         """Called from the watcher thread; blocks it until the user answers
         the popup shown on the main thread."""
         done_event = threading.Event()
         result_holder = []
-        self.confirm_queue.put((original_path, destination_path, result_holder, done_event))
+        self.confirm_queue.put((original_path, destination_paths, result_holder, done_event))
         done_event.wait()
         return result_holder[0] if result_holder else False
 

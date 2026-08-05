@@ -2,7 +2,7 @@ import os
 import re
 import time
 import shutil
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 from pdf2image import convert_from_path
 import pytesseract
 from watchdog.observers import Observer
@@ -22,10 +22,11 @@ def save_config(config):
         json.dump(config, f, indent=4)
 
 
-def default_confirm_delete(original_path, destination_path):
+def default_confirm_delete(original_path, destination_paths):
+    outputs = "\n".join(destination_paths)
     try:
         answer = input(
-            f"Output saved to {destination_path}\nDelete the original scan ({original_path})? [y/N]: "
+            f"Output saved to:\n{outputs}\nDelete the original scan ({original_path})? [y/N]: "
         ).strip().lower()
     except EOFError:
         return False
@@ -103,6 +104,31 @@ class InvoiceHandler(FileSystemEventHandler):
 
         return page_texts
 
+    def _group_consecutive_pages(self, page_numbers):
+        """Group page indexes into runs where consecutive pages share the
+        same detected number, e.g. a 2-page invoice repeating its number on
+        both pages becomes a single group instead of two."""
+        groups = []
+        start = 0
+        current = page_numbers[0]
+
+        for i in range(1, len(page_numbers)):
+            if page_numbers[i] != current:
+                groups.append((current, start, i - 1))
+                start = i
+                current = page_numbers[i]
+
+        groups.append((current, start, len(page_numbers) - 1))
+        return groups
+
+    def _unique_destination(self, number):
+        destination = os.path.join(self.processed_dir, f"{number}.pdf")
+        counter = 2
+        while os.path.exists(destination):
+            destination = os.path.join(self.processed_dir, f"{number} ({counter}).pdf")
+            counter += 1
+        return destination
+
     def process_pdf(self, file_path):
         if not self.wait_for_stable_file(file_path):
             self.log(f"File never became available: {file_path}")
@@ -115,32 +141,49 @@ class InvoiceHandler(FileSystemEventHandler):
                 self.log("OCR produced no text. File left in incoming folder.")
                 return
 
-            invoice_numbers = []
+            page_numbers = []
             for i, text in enumerate(page_texts):
                 matches = re.findall(r"\b\d{6}\b", text)
                 if not matches:
                     matches = re.findall(r"Invoice\s*#?\s*:?\s*(\d{4,})", text, re.IGNORECASE)
 
                 if matches:
-                    invoice_numbers.append(matches[0])
+                    page_numbers.append(matches[0])
                 else:
+                    page_numbers.append(None)
                     self.log(f"Page {i + 1}: no invoice number found.")
                     self.log(f"--- OCR text preview (page {i + 1}) ---\n{text[:300]}\n------------------------")
 
-            if not invoice_numbers:
+            if not any(page_numbers):
                 self.log("No invoice numbers extracted from any page. File left in incoming folder.")
                 return
 
-            invoices_str = " ".join(invoice_numbers)
-            new_filename = f"{invoices_str}.pdf"
-
             os.makedirs(self.processed_dir, exist_ok=True)
-            destination = os.path.join(self.processed_dir, new_filename)
+            reader = PdfReader(file_path)
 
-            shutil.copy2(file_path, destination)
-            self.log(f"Successfully processed -> {destination}")
+            written_files = []
+            for number, start, end in self._group_consecutive_pages(page_numbers):
+                if number is None:
+                    page_range = f"page {start + 1}" if start == end else f"pages {start + 1}-{end + 1}"
+                    self.log(f"Skipped {page_range}: no invoice number found, not included in any output file.")
+                    continue
 
-            if self.confirm_delete(file_path, destination):
+                destination = self._unique_destination(number)
+                writer = PdfWriter()
+                for page_index in range(start, end + 1):
+                    writer.add_page(reader.pages[page_index])
+                with open(destination, "wb") as f:
+                    writer.write(f)
+
+                written_files.append(destination)
+                page_range = f"page {start + 1}" if start == end else f"pages {start + 1}-{end + 1}"
+                self.log(f"Successfully processed ({page_range}) -> {destination}")
+
+            if not written_files:
+                self.log("No invoice numbers extracted from any page. File left in incoming folder.")
+                return
+
+            if self.confirm_delete(file_path, written_files):
                 try:
                     os.remove(file_path)
                     self.log(f"Deleted original scan: {file_path}")
