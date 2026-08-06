@@ -28,6 +28,9 @@ class InvoiceRenamerGUI:
         self._poll_log_queue()
         self._poll_confirm_queue()
 
+        if self.config.get("auto_start_watching", False):
+            self._start()
+
     def _build_ui(self):
         pad = {"padx": 8, "pady": 6}
 
@@ -48,6 +51,9 @@ class InvoiceRenamerGUI:
 
         self.start_button = ttk.Button(controls_frame, text="Start Watching", command=self._start)
         self.start_button.pack(side="left")
+
+        self.settings_button = ttk.Button(controls_frame, text="Settings", command=self._open_settings)
+        self.settings_button.pack(side="right")
 
         self.stop_button = ttk.Button(controls_frame, text="Stop", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=8)
@@ -82,6 +88,50 @@ class InvoiceRenamerGUI:
         self.config["processed_dir"] = self.processed_dir_var.get()
         core.save_config(self.config)
         self._log(f"Saved settings. Output folder set to: {self.config['processed_dir']}")
+
+    def _open_settings(self):
+        if getattr(self, "settings_window", None) is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Settings")
+        window.resizable(False, False)
+        window.transient(self.root)
+        self.settings_window = window
+
+        pad = {"padx": 8, "pady": 6}
+        auto_delete_var = tk.BooleanVar(value=self.config.get("auto_delete_original", False))
+        auto_start_var = tk.BooleanVar(value=self.config.get("auto_start_watching", False))
+
+        frame = ttk.Frame(window)
+        frame.pack(fill="both", expand=True, **pad)
+
+        ttk.Checkbutton(
+            frame,
+            text="Automatically delete original files from the input folder after processing\n(don't ask each time)",
+            variable=auto_delete_var,
+        ).pack(anchor="w", padx=6, pady=4)
+
+        ttk.Checkbutton(
+            frame,
+            text="Automatically start watching when the app is opened",
+            variable=auto_start_var,
+        ).pack(anchor="w", padx=6, pady=4)
+
+        button_frame = ttk.Frame(window)
+        button_frame.pack(fill="x", **pad)
+
+        def save_and_close():
+            self.config["auto_delete_original"] = auto_delete_var.get()
+            self.config["auto_start_watching"] = auto_start_var.get()
+            core.save_config(self.config)
+            self._log("Saved settings.")
+            window.destroy()
+
+        ttk.Button(button_frame, text="Save", command=save_and_close).pack(side="right")
+        ttk.Button(button_frame, text="Cancel", command=window.destroy).pack(side="right", padx=8)
 
     def _log(self, message):
         self.log_queue.put(message)
@@ -120,6 +170,9 @@ class InvoiceRenamerGUI:
     def _confirm_delete(self, original_path, destination_paths):
         """Called from the watcher thread; blocks it until the user answers
         the popup shown on the main thread."""
+        if self.config.get("auto_delete_original", False):
+            return True
+
         done_event = threading.Event()
         result_holder = []
         self.confirm_queue.put((original_path, destination_paths, result_holder, done_event))
@@ -179,7 +232,7 @@ class InvoiceRenamerGUI:
         if self.worker_thread and self.worker_thread.is_alive():
             self._stop()
             self._decline_pending_confirms()
-            self.worker_thread.join(timeout=5)
+            self.worker_thread.join(timeout=2)
         self.root.destroy()
 
     def _decline_pending_confirms(self):

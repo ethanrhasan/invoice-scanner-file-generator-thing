@@ -208,7 +208,7 @@ def run_watcher(config, log=print, stop_event=None, confirm_delete=None):
     observer.start()
     try:
         while not (stop_event and stop_event.is_set()):
-            time.sleep(0.5)
+            time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
