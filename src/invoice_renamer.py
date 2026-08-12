@@ -40,10 +40,11 @@ class InvoiceHandler(FileSystemEventHandler):
         self.confirm_delete = confirm_delete or default_confirm_delete
         self.watch_dir = os.path.expanduser(config["watch_dir"])
         self.processed_dir = os.path.expanduser(config["processed_dir"])
-        self.poppler_path = config.get("poppler_path") or None
+        poppler_path = config.get("poppler_path")
+        self.poppler_path = os.path.expanduser(poppler_path) if poppler_path else None
 
         if config.get("tesseract_cmd"):
-            pytesseract.pytesseract.tesseract_cmd = config["tesseract_cmd"]
+            pytesseract.pytesseract.tesseract_cmd = os.path.expanduser(config["tesseract_cmd"])
 
     def on_created(self, event):
         if event.is_directory or not event.src_path.lower().endswith(".pdf"):

@@ -39,11 +39,17 @@ class InvoiceRenamerGUI:
         paths_frame.columnconfigure(1, weight=1)
 
         ttk.Label(paths_frame, text="Watch (scan input) folder:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        ttk.Entry(paths_frame, textvariable=self.watch_dir_var).grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+        watch_entry = ttk.Entry(paths_frame, textvariable=self.watch_dir_var)
+        watch_entry.grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+        watch_entry.bind("<FocusOut>", self._on_path_field_changed)
+        watch_entry.bind("<Return>", self._on_path_field_changed)
         ttk.Button(paths_frame, text="Browse...", command=self._browse_watch_dir).grid(row=0, column=2, padx=6, pady=4)
 
         ttk.Label(paths_frame, text="Output (renamed files) folder:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
-        ttk.Entry(paths_frame, textvariable=self.processed_dir_var).grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        processed_entry = ttk.Entry(paths_frame, textvariable=self.processed_dir_var)
+        processed_entry.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        processed_entry.bind("<FocusOut>", self._on_path_field_changed)
+        processed_entry.bind("<Return>", self._on_path_field_changed)
         ttk.Button(paths_frame, text="Browse...", command=self._browse_processed_dir).grid(row=1, column=2, padx=6, pady=4)
 
         controls_frame = ttk.Frame(self.root)
@@ -83,11 +89,25 @@ class InvoiceRenamerGUI:
             self.processed_dir_var.set(chosen)
             self._save_paths()
 
+    def _on_path_field_changed(self, event=None):
+        self._save_paths()
+
     def _save_paths(self):
         self.config["watch_dir"] = self.watch_dir_var.get()
         self.config["processed_dir"] = self.processed_dir_var.get()
         core.save_config(self.config)
         self._log(f"Saved settings. Output folder set to: {self.config['processed_dir']}")
+
+        if self.worker_thread and self.worker_thread.is_alive():
+            self._log("Folders changed while watching; restarting watcher to apply the change...")
+            self._stop()
+            self._restart_when_stopped()
+
+    def _restart_when_stopped(self):
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.root.after(100, self._restart_when_stopped)
+        else:
+            self._start()
 
     def _open_settings(self):
         if getattr(self, "settings_window", None) is not None and self.settings_window.winfo_exists():
@@ -229,6 +249,10 @@ class InvoiceRenamerGUI:
         self.stop_button.configure(state="disabled")
 
     def _on_close(self):
+        self.config["watch_dir"] = self.watch_dir_var.get()
+        self.config["processed_dir"] = self.processed_dir_var.get()
+        core.save_config(self.config)
+
         if self.worker_thread and self.worker_thread.is_alive():
             self._stop()
             self._decline_pending_confirms()

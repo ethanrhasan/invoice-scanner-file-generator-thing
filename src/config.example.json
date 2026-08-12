@@ -3,7 +3,7 @@
 	"processed_dir": "~/Downloads/invoicerenamer/invoice-output",
 
 	"tesseract_cmd": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-	"poppler_path": "C:\\Users\\aadis\\Downloads\\Release-26.02.0-0\\poppler-26.02.0\\Library\\bin",
+	"poppler_path": "C:\\path\\to\\poppler-XX.XX.X\\Library\\bin",
 
 	"ocr_dpi": 300,
 	"invoice_number_length": 6,
